@@ -1,0 +1,873 @@
+---
+title: "Neha and Kumar Analysis"
+author: "Kevin Donovan"
+date:  '`r format(Sys.Date(), "%B %d, %Y")`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+library(readxl)
+library(tidyverse)
+library(formula.tools)
+library(car)
+library(gridGraphics)
+library(gridExtra)
+library(flextable)
+library(knitr)
+library(gtsummary)
+library(gt)
+library(broom)
+library(lsmeans)
+library(olsrr)
+```
+
+```{r load_center_data}
+# Load data
+kumar_data <- read_excel("SA_sMRI_LV_beh_2018-04-12masterspreadsheetPK.xlsx")
+kumar_data <- kumar_data %>% 
+  filter(LV_analys_v2==1) %>%
+  mutate(SA_DX_LV_v2=factor(SA_DX_LV_v2) %>%
+           relevel(ref="TD"),
+         log_LV_tot_vol=log(`LV_tot_vol_(cm3)`),
+         log_LV_LatIndex=log(LV_LatIndex)) %>% 
+  select(SA_DX_LV_v2, `LV_tot_vol_(cm3)`, LV_LatIndex, 
+         log_LV_tot_vol, log_LV_LatIndex, `TCV_(cm3)`, `Age_(years)`,
+         vinelandii_abcomp_ss, vinelandii_comm_ss, 
+         vinelandii_dls_ss, vinelandii_motor_ss, vinelandii_social_ss, 
+         dasii_sa_gca_stand, dasii_sa_snc_stand)
+
+# Center continuous variables
+kumar_data_center <- kumar_data %>%
+  mutate(TCV_center = `TCV_(cm3)`-mean(`TCV_(cm3)`, na.rm=TRUE),
+         Age_center = `Age_(years)`-mean(`Age_(years)`, na.rm=TRUE),
+         LV_tot_vol_center = `LV_tot_vol_(cm3)`-mean(`LV_tot_vol_(cm3)`, na.rm=TRUE))
+```
+
+# Summary Statistics
+
+```{r summary_stats}
+tbl_summary(kumar_data %>% select(-log_LV_tot_vol, -log_LV_LatIndex, -LV_LatIndex), 
+            by=SA_DX_LV_v2,
+            statistic = list(all_continuous() ~ "{mean} ({sd})"),
+            missing = "no",
+            label  = list(`LV_tot_vol_(cm3)` ~ "LV Total Volume (cm@3%)",
+                          `TCV_(cm3)` ~ "TCV (cm@3%)",
+                          `Age_(years)` ~ "Age (years)",
+                          vinelandii_abcomp_ss ~ "VABS ABC Standard Score",
+                          vinelandii_comm_ss ~ "VABS Comm. Standard Score",
+                          vinelandii_dls_ss ~ "VABS DLS Standard Score",
+                          vinelandii_motor_ss ~ "VABS Motor Standard Score",
+                          vinelandii_social_ss ~ "VABS Social Standard Score",
+                          dasii_sa_gca_stand ~ "DAS GCA Standard Score",
+                          dasii_sa_snc_stand ~ "DAS SNC Standard Score")) %>%
+  add_p(test=list(all_continuous() ~ "aov")) %>%
+  add_n() %>%
+  as_flex_table() %>% 
+  compose(j="label", i=1,
+          value=as_paragraph("LV Total Volume (cm", as_sup("3"), ")")) %>%
+  compose(j="label", i=2,
+          value=as_paragraph("TCV (cm", as_sup("3"), ")")) %>%
+  save_as_docx(path="plots_tables/summary_stats.docx")
+```
+
+# Data Exploration
+```{r data_long_plots}
+# Set color blind safe color scale
+cbp1 <- c("#009E73", "#E69F00", "#56B4E9",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+ggplot(data=kumar_data,
+       aes(x=`TCV_(cm3)`, y=`LV_tot_vol_(cm3)`, color=SA_DX_LV_v2))+
+  geom_point()+
+  geom_smooth(method="lm", se=FALSE)+
+  labs(x=expression(paste("TCV (", cm^3, ")")),
+       y=expression(paste("LV Total Volume (", cm^3, ")")),
+       color="School Age\nDiagnosis")+
+  scale_colour_manual(values=cbp1)+
+  theme_bw()+
+  theme(text = element_text(size=25))
+ggsave(filename = "plots_tables/tcv_lv_scatterplot.png", 
+       limitsize = FALSE, scale=2.5)
+
+ggplot(data=kumar_data,
+       aes(x=`Age_(years)`, y=`LV_tot_vol_(cm3)`, color=SA_DX_LV_v2))+
+  geom_point()+
+  geom_smooth(method="lm", se=FALSE)+
+  labs(x="Age (Years)",
+       y=expression(paste("LV Total Volume (", cm^3, ")")),
+       color="School Age\nDiagnosis")+
+  scale_colour_manual(values=cbp1)+
+  theme_bw()+
+  theme(text = element_text(size=25))
+ggsave(filename = "plots_tables/age_lv_scatterplot.png", 
+       limitsize = FALSE, scale=2.5)
+
+ggplot(data=kumar_data,
+       aes(x=SA_DX_LV_v2, y=`LV_tot_vol_(cm3)`, fill=SA_DX_LV_v2))+
+  geom_boxplot()+
+  labs(x="School Age Diagnosis",
+       y=expression(paste("LV Total Volume (", cm^3, ")")),
+       fill="School Age Diagnosis")+
+  scale_fill_manual(values=cbp1)+
+  theme_bw()+
+  theme(legend.position = "none",
+        text = element_text(size=25))
+ggsave(filename = "plots_tables/lv_dx_boxplot.png", 
+       limitsize = FALSE, scale=2.5)
+```
+
+```{r}
+kumar_data_no_outliers <-
+  kumar_data %>%
+    filter(`LV_tot_vol_(cm3)`<=median(`LV_tot_vol_(cm3)`, na.rm = TRUE)+1.5*(quantile(`LV_tot_vol_(cm3)`, 0.75)-quantile(`LV_tot_vol_(cm3)`, 0.25)))
+
+ggplot(data=kumar_data_no_outliers,
+       aes(x=SA_DX_LV_v2, y=`LV_tot_vol_(cm3)`, fill=SA_DX_LV_v2))+
+  geom_boxplot()+
+  labs(x="School Age Diagnosis",
+       y=expression(paste("LV Total Volume (", cm^3, ")")),
+       fill="School Age Diagnosis")+
+  scale_fill_manual(values=cbp1)+
+  theme_bw()+
+  theme(legend.position = "none",
+        text = element_text(size=25))
+
+tbl_summary(kumar_data_no_outliers %>% 
+              select(-log_LV_tot_vol, -log_LV_LatIndex, -LV_LatIndex), 
+            by=SA_DX_LV_v2,
+            statistic = list(all_continuous() ~ "{mean} ({sd})"),
+            missing = "no",
+            label  = list(`LV_tot_vol_(cm3)` ~ "LV Total Volume (cm@3%)",
+                          `TCV_(cm3)` ~ "TCV (cm@3%)",
+                          `Age_(years)` ~ "Age (years)",
+                          vinelandii_abcomp_ss ~ "VABS ABC Standard Score",
+                          vinelandii_comm_ss ~ "VABS Comm. Standard Score",
+                          vinelandii_dls_ss ~ "VABS DLS Standard Score",
+                          vinelandii_motor_ss ~ "VABS Motor Standard Score",
+                          dasii_sa_gca_stand ~ "DAS GCA Standard Score",
+                          dasii_sa_snc_stand ~ "DAS SNC Standard Score")) %>%
+  add_p(test=list(all_continuous() ~ "aov")) %>%
+  as_flex_table() %>% 
+  compose(j="label", i=1,
+          value=as_paragraph("LV Total Volume (cm", as_sup("3"), ")")) %>%
+  compose(j="label", i=2,
+          value=as_paragraph("TCV (cm", as_sup("3"), ")"))
+```
+
+# Analysis Plan
+
+The main objective of this analysis is to estimate the assoications between LV total volume and diagnosis group (TD: Typically Developing, FXS: Fragile X, ASD: Autism) as well as LV total volume and various measures of cognitive ability in school age children  This is done using linear regression, while controlling for different sets of additional covariates.  The full set of outcome and covariates are the folllwing:
+
+Outcome: LV Total Volume
+
+Covariates:
+
+1) **Diagnosis**, TCV, Age, Diagnosis*Age
+
+Outcome: LV Lat Index
+
+Covariates:
+
+1) **Diagnosis**, TCV, Age, Diagnosis*Age
+
+Outcome: Behavioral measure (7)
+
+Covariates:
+
+1) **Diagnosis**, LV Total Volume, TCV, Age, Diagnosis*Age
+
+For each model, we visually analyzed the residual by fitted value scatterplot as well as the residual QQ plot to assess the goodness of fit of each model to the data/check the assumptions of the linear model.  As an way of improving fit while maintaing interpretability, we consider natural log transformations of the outcome for each model.  These plots as well as the regression parameter estimates, standard errors, p-values are provided below.  We also provide Type III tests for significant main effect of diagnosis when appropriate.  All continuous covariates are center to have mean zero to facilitate interpretation of the intercept regression parameter.
+
+```{r untrans_model_run}
+## Regression analyses
+# Analysis function
+lm_analysis_fn <- function(frmla){
+  output <- list()
+  fit <- lm(frmla, kumar_data_center)
+  output[["Model_name"]] <- gsub("`","",paste(formula.tools::get.vars(frmla)[1], formula.tools::get.vars(frmla)[2], sep="_by_"))
+  output[["Parameter_estimates"]] <- summary(fit)$coefficients
+  output[["Type_III_results"]] <- Anova(fit, type="III", test.statistic = "F")
+  output[["Fitted_values_residuals"]] <- data.frame("Fitted_values"=fit$fitted.values, 
+                                                    "Residuals"=fit$residuals)
+  
+  residual_dataset <- data.frame("fitted_vals"=fit$fitted.values, 
+                                 "residuals"=fit$residuals)
+  ggplot(data=residual_dataset, 
+         mapping=aes(x=fitted_vals, y=residuals))+
+    geom_point()+
+    ggtitle(paste(output[["Model_name"]],
+                      ":\nFitted value by residual scatterplot",
+                      sep=""))
+
+  output[["Fitted_values_residuals_plot"]] <- 
+    ggplot(data=residual_dataset, 
+           mapping=aes(x=fitted_vals, y=residuals))+
+      geom_point()+
+      ggtitle(paste(output[["Model_name"]],
+                    ":\nFitted value by residual scatterplot",
+                    sep=""))
+
+  output[["Residuals_QQ_plot"]] <- 
+    ggplot(data=residual_dataset, 
+           mapping=aes(sample=residuals))+
+    geom_qq()+
+    geom_qq_line()+
+    ggtitle(paste(output[["Model_name"]],":\nQQ plot of residuals", 
+                  sep=""))
+  return(output)
+}
+
+untransformed_models <- 
+  list(
+    `LV_tot_vol_(cm3)`~TCV_center+Age_center+SA_DX_LV_v2+SA_DX_LV_v2*TCV_center+
+                               SA_DX_LV_v2*Age_center,
+    
+    LV_LatIndex~TCV_center+Age_center+SA_DX_LV_v2+SA_DX_LV_v2*TCV_center+
+                               SA_DX_LV_v2*Age_center,
+    
+    vinelandii_abcomp_ss~LV_tot_vol_center+TCV_center+Age_center+SA_DX_LV_v2+
+                               SA_DX_LV_v2*TCV_center+SA_DX_LV_v2*Age_center,
+    vinelandii_comm_ss~LV_tot_vol_center+TCV_center+Age_center+SA_DX_LV_v2+
+                               SA_DX_LV_v2*TCV_center+SA_DX_LV_v2*Age_center,
+    vinelandii_dls_ss~LV_tot_vol_center+TCV_center+Age_center+SA_DX_LV_v2+
+                        SA_DX_LV_v2*TCV_center+SA_DX_LV_v2*Age_center,
+    vinelandii_motor_ss~LV_tot_vol_center+TCV_center+Age_center+SA_DX_LV_v2+
+                        SA_DX_LV_v2*TCV_center+SA_DX_LV_v2*Age_center,
+    vinelandii_social_ss~LV_tot_vol_center+TCV_center+Age_center+SA_DX_LV_v2+
+                        SA_DX_LV_v2*TCV_center+SA_DX_LV_v2*Age_center,
+    dasii_sa_gca_stand~LV_tot_vol_center+TCV_center+Age_center+SA_DX_LV_v2+
+                        SA_DX_LV_v2*TCV_center+SA_DX_LV_v2*Age_center,
+    dasii_sa_snc_stand~LV_tot_vol_center+TCV_center+Age_center+SA_DX_LV_v2+
+                       SA_DX_LV_v2*TCV_center+SA_DX_LV_v2*Age_center)
+
+untransformed_output <- lapply(untransformed_models, lm_analysis_fn)
+```
+
+```{r trans_model_run}
+
+transformed_models <- list(
+    log_LV_tot_vol~TCV_center+Age_center+SA_DX_LV_v2+SA_DX_LV_v2*TCV_center+
+                               SA_DX_LV_v2*Age_center,
+    
+    LV_LatIndex~TCV_center+Age_center+SA_DX_LV_v2+SA_DX_LV_v2*TCV_center+
+                               SA_DX_LV_v2*Age_center,
+    
+    vinelandii_abcomp_ss~LV_tot_vol_center+Age_center+SA_DX_LV_v2+SA_DX_LV_v2*Age_center,
+    vinelandii_comm_ss~LV_tot_vol_center+Age_center+SA_DX_LV_v2+SA_DX_LV_v2*Age_center,
+    vinelandii_dls_ss~LV_tot_vol_center+Age_center+SA_DX_LV_v2+SA_DX_LV_v2*Age_center,
+    vinelandii_motor_ss~LV_tot_vol_center+Age_center+SA_DX_LV_v2+SA_DX_LV_v2*Age_center,
+    vinelandii_social_ss~LV_tot_vol_center+Age_center+SA_DX_LV_v2+SA_DX_LV_v2*Age_center,
+    dasii_sa_gca_stand~LV_tot_vol_center+Age_center+SA_DX_LV_v2+SA_DX_LV_v2*Age_center,
+    dasii_sa_snc_stand~LV_tot_vol_center+Age_center+SA_DX_LV_v2+SA_DX_LV_v2*Age_center)
+
+transformed_output <- lapply(transformed_models, lm_analysis_fn)
+```
+
+# Results
+## Diagnostics
+### Untransformed Models
+```{r print_diagnostics_plots_untrans}
+diagnostic_plots_untrans <- list()
+diagnostic_plots_trans <- list()
+
+for(i in 1:length(untransformed_output)){
+  # Untransformed
+  diagnostic_plots_untrans[[i]] <- list("Res_FV_Plot"=untransformed_output[[i]]$Fitted_values_residuals_plot,
+     "QQ_Plot"=untransformed_output[[i]]$Residuals_QQ_plot)
+  
+  names(diagnostic_plots_untrans)[i] <-
+    untransformed_output[[i]]$Model_name
+  
+  # Transformed
+  diagnostic_plots_trans[[i]] <- list("Res_FV_Plot"=transformed_output[[i]]$Fitted_values_residuals_plot,
+     "QQ_Plot"=transformed_output[[i]]$Residuals_QQ_plot)
+  
+  names(diagnostic_plots_trans)[i] <-
+    transformed_output[[i]]$Model_name
+}
+
+for(i in 1:length(untransformed_output)){
+  cat("\n")
+  print(unname(diagnostic_plots_untrans[[i]]))
+  cat("\n")
+  print(untransformed_models[[i]])
+  cat("\n")
+}
+```
+
+### Transformed Models
+```{r print_diag_trans}
+for(i in 1:length(transformed_output)){
+  cat("\n")
+  print(unname(diagnostic_plots_trans[[i]]))
+  cat("\n")
+  print(transformed_models[[i]])
+  cat("\n")
+}
+```
+
+## Inference
+Based on the above plots, we notice a significant improvement in fit with the transformed model for LV total volume.  Note that due to the fairly large sample size with the central limit theorem, the equal variance for the fitted value by residual plot is most important.  We print the results in the following order for each model:
+
+1) Model name (for organization)
+
+2) Parameter estimates, SEs, etc.
+
+3) Type III tests for main effects
+
+```{r print_trans, results = "asis"}
+trans_model_results <- list()
+
+for(i in 1:length(transformed_models)){
+  fit <- lm(transformed_models[[i]], kumar_data_center)
+  print(paste0("Response: ", formula.tools::get.vars(transformed_models[[i]])[1]))
+  print(paste0("Model: ", transformed_models[[i]]))
+  
+  # Table of covariate effects
+  reg_outcomes <- rownames_to_column(data.frame(summary(fit)$coef), var="Covariate") %>%
+    plyr::rename(c("Std..Error" = "Standard Error",
+                   "t.value" = "T Statistic",
+                   "Pr...t.." = "P-value")) %>%
+    mutate("Outcome" = formula.tools::get.vars(transformed_models[[i]])[1]) %>%
+    filter(Covariate!="(Intercept)") %>%
+    mutate(Covariate = 
+             gsub("dasii_sa_snc_stand", "DAS SNC Standard Score",
+                  gsub("dasii_sa_gca_stand", "DAS GCA Standard Score",
+                      gsub("vinelandii_motor_ss", "VABS Motor Standard Score",
+                          gsub("vinelandii_abcomp_ss", "VABS ABC Standard Score",   
+                              gsub("vinelandii_social_ss", "VABS Social Standard Score",
+                                  gsub("vinelandii_dls_ss", "VABS DLS Standard Score",
+                                      gsub("vinelandii_comm_ss", "VABS Comm. Standard Score",
+                                          gsub("SA_DX_LV_v2|\\_\\(years\\)|\\_\\(cm3\\)|`",
+                                               "", 
+                                               Covariate)))))))),
+           Outcome = fct_recode(factor(Outcome),
+                                `Log LV Total Volume` = "log_LV_tot_vol",
+                                  `Log LV Lat Index` = "log_LV_LatIndex"),
+           Model = i) %>%
+    select(Covariate, Outcome, Estimate, `P-value`, Model)
+  
+  flextable(reg_outcomes)
+  
+  # Type III test tables
+  reg_type3_tests <- 
+    rownames_to_column(data.frame(Anova(fit, type="III", test.statistic = "F")), var="Covariate_TIII") %>%
+    plyr::rename(c("F.value" = "F Statistic",
+                   "Pr..F." = "Type III P-value")) %>%
+    mutate("Outcome" = formula.tools::get.vars(transformed_models[[i]])[1]) %>%
+    filter(!Covariate_TIII%in%c("(Intercept)", "Residuals")) %>%
+    mutate(Covariate_TIII = 
+             gsub("dasii_sa_snc_stand", "DAS SNC Standard Score",
+                  gsub("dasii_sa_gca_stand", "DAS GCA Standard Score",
+                      gsub("vinelandii_motor_ss", "VABS Motor Standard Score",
+                          gsub("vinelandii_dls_ss", "VABS DLS Standard Score",
+                              gsub("vinelandii_comm_ss", "VABS Comm. Standard Score",
+                                  gsub("\\_\\(years\\)|\\_\\(cm3\\)|`", "", Covariate_TIII)))))),
+           Outcome = fct_recode(factor(Outcome),
+                                `Log LV Total Volume` = "log_LV_tot_vol",
+                                  `Log LV Lat Index` = "log_LV_LatIndex"),
+           Covariate = ifelse(grepl("SA_DX_LV_v2", Covariate_TIII), 
+                              gsub("SA_DX_LV_v2", "ASD", Covariate_TIII),
+                              Covariate_TIII),
+           Model = i) %>%
+    select(Covariate, Outcome, `Type III P-value`, Model)
+  
+  flextable(reg_type3_tests)
+  
+  # Whole table
+  trans_model_results[[i]] <- 
+    left_join(reg_outcomes, reg_type3_tests)
+  flextable(trans_model_results[[i]])
+
+}
+
+trans_model_results_full <- do.call("rbind", trans_model_results) %>%
+  select(Model, everything()) %>%
+  arrange(Model) %>%
+  mutate(`Type III P-value` = 
+           ifelse(round(`Type III P-value`, 9)==round(`P-value`,9), NA, `Type III P-value`)) %>%
+  as_grouped_data(groups = "Model")
+
+flextable(trans_model_results_full) %>%
+  hline(i = ~ !is.na(Model), border = officer::fp_border() ) %>%
+  width(names(trans_model_results_full)[names(trans_model_results_full)!="Model"], 
+        width=1.2) %>%
+  save_as_docx(path="plots_tables/trans_results.docx")
+```
+
+## Inference - Back Transform
+For interpretation, we back transform the log transformation using the exponential function.  That is, given the linear model
+
+$log(Y)=\beta_0+\beta_1*X+\epsilon$
+
+$Y=\exp(\beta_0)*\exp(\beta_1X)*\exp(\epsilon)$
+
+this implies for a one unit change in X
+
+$Y=\exp(\beta_1)\exp(\beta_0)*\exp(\beta_1)X*\exp(\epsilon)$
+
+resulting in a percent change in $Y$ given by $\exp(\beta_1)-1$.  Using continuity, confidence intervals can be constructed for the regression coefficients also by exponentiation.
+
+```{r print_back_trans, results = "asis"}
+back_trans_results <- list()
+fit <- list()
+
+for(i in 1:length(transformed_models)){
+  back_trans_results[[i]] <- list()
+  cat("\n")
+  print(paste0("Model ", i))
+  fit[[i]] <- lm(transformed_models[[i]], kumar_data_center)
+  
+  # Transform betas and confidence intervals
+  back_trans_results_df <- list()
+  back_trans_results_df$Model <- i
+  back_trans_results_df$Outcome <- formula.tools::get.vars(transformed_models[[i]])[1]
+  back_trans_results_df$Covariate <- names(summary(fit[[i]])$coef[,"Estimate"])
+  
+  if(grepl("log", back_trans_results_df$Outcome)){
+    back_trans_results_df$Estimate <- 100*(exp(summary(fit[[i]])$coef[,"Estimate"])-1)
+  }else{
+    back_trans_results_df$Estimate <- summary(fit[[i]])$coef[,"Estimate"]
+  }
+  back_trans_results_df$P_value <- 
+    ifelse(summary(fit[[i]])$coef[,"Pr(>|t|)"]<0.005, "<0.005***",
+           ifelse(summary(fit[[i]])$coef[,"Pr(>|t|)"]>=0.005&
+                    summary(fit[[i]])$coef[,"Pr(>|t|)"]<0.01,
+                  paste0(as.character(round(summary(fit[[i]])$coef[,"Pr(>|t|)"],3)),"**"),
+                  ifelse(summary(fit[[i]])$coef[,"Pr(>|t|)"]>=0.01&
+                    summary(fit[[i]])$coef[,"Pr(>|t|)"]<0.05,
+                    paste0(as.character(round(summary(fit[[i]])$coef[,"Pr(>|t|)"],3)),"*"),
+                    as.character(round(summary(fit[[i]])$coef[,"Pr(>|t|)"],3)))))
+  
+  if(grepl("log", back_trans_results_df$Model)){
+    back_trans_results_df$`CI` <- 
+      paste0("(", 
+             100*round(exp(confint(fit[[i]])[, "2.5 %"])-1, 4), 
+             ", ", 
+             100*round(exp(confint(fit[[i]])[, "97.5 %"])-1, 4), 
+             ")")
+  }else{
+    back_trans_results_df$`CI` <- 
+      paste0("(", 
+             round(confint(fit[[i]])[, "2.5 %"], 4), 
+             ", ", 
+             round(confint(fit[[i]])[, "97.5 %"], 4), 
+             ")")
+  }
+
+  back_trans_results[[i]] <- data.frame(back_trans_results_df) %>%
+    filter(Covariate!="(Intercept)") %>%
+    mutate(Covariate = 
+             gsub("dasii_sa_snc_stand", "DAS SNC Standard Score",
+                  gsub("dasii_sa_gca_stand", "DAS GCA Standard Score",
+                      gsub("vinelandii_motor_ss", "VABS Motor Standard Score",
+                          gsub("vinelandii_dls_ss", "VABS DLS Standard Score",
+                              gsub("vinelandii_comm_ss", "VABS Comm. Standard Score",
+                                  gsub("SA_DX_LV_v2|\\_\\(years\\)|\\_\\(cm3\\)|`", "", Covariate)))))),
+           Outcome = fct_recode(factor(Outcome),
+                                `Log LV Total Volume` = "log_LV_tot_vol"))
+
+}
+
+back_trans_results_full <- do.call("rbind", back_trans_results) %>%
+  select(Model, everything()) %>%
+  arrange(Model) %>%
+  as_grouped_data(groups = "Model") %>%
+  select(Model, Covariate, Outcome, everything())
+
+back_trans_results_full_table <-
+  back_trans_results_full %>%
+  mutate(Covariate = 
+           fct_recode(factor(Covariate),
+                      "LV Total Volume (cm3)"="LV_tot_vol_center",
+                      "TCV (cm3)"="TCV_center",
+                      "Age (years)"="Age_center",
+                      "TCV (cm3):FXS"="TCV_center:FXS",
+                      "TCV (cm3):ASD"="TCV_center:ASD",
+                      "Age (years):FXS"="Age_center:FXS",
+                      "Age (years):ASD"="Age_center:ASD"),
+         Outcome = 
+           fct_recode(factor(Outcome),
+                      "LV Total Volume (cm3)"="Log LV Total Volume",
+                      "LV Lateral Index"="LV_LatIndex",
+                      "VABS ABC SS"="vinelandii_abcomp_ss",
+                      "VABS Comm SS"="vinelandii_comm_ss",
+                      "VABS DLS SS"="vinelandii_dls_ss",
+                      "VABS Motor SS"="vinelandii_motor_ss",
+                      "VABS Social SS"="vinelandii_social_ss",
+                      "DAS GCA SS"="dasii_sa_gca_stand",
+                      "DAS SNC SS"="dasii_sa_snc_stand"))
+
+flextable(back_trans_results_full_table %>%
+            filter(Outcome%in% c("LV Total Volume (cm3)",
+                                 "LV Lateral Index")) %>%
+            select(-Model) %>%
+            select(Outcome, everything())) %>%
+  width(width=1.5) %>%
+  colformat_double(digits=2) %>%
+  merge_v(j=1) %>%
+  valign(valign = "top") %>%
+  save_as_docx(path="plots_tables/back_trans_primary_results.docx")
+
+flextable(back_trans_results_full_table %>%
+            filter(!Outcome%in%c("LV Total Volume (cm3)",
+                                 "LV Lateral Index")) %>%
+            select(-Model) %>%
+            select(Outcome, everything()) %>%
+            drop_na()) %>%
+  width(width=1.5) %>%
+  colformat_double(digits=2) %>%
+  merge_v(j=1) %>%
+  valign(valign = "top") %>%
+  save_as_docx(path="plots_tables/back_trans_second_results.docx")
+
+# Create plots
+# LS Means
+ls_means_trans <- list()
+
+for(i in 1:length(transformed_models)){
+  ls_means_trans[[i]] <- 
+    data.frame(lsmeans(fit[[i]], "SA_DX_LV_v2"))
+  ls_means_trans[[i]]$outcome <- formula.tools::get.vars(transformed_models[[i]])[1]
+}
+
+ls_means_trans_df <- do.call("rbind", ls_means_trans) %>%
+  mutate(lsmean=ifelse(grepl("log", outcome), exp(lsmean), lsmean),
+         lower.CL=ifelse(grepl("log", outcome), exp(lower.CL), lower.CL),
+         upper.CL=ifelse(grepl("log", outcome), exp(upper.CL), upper.CL)) %>%
+  mutate(outcome = 
+           fct_recode(factor(outcome),
+                      "LV Total Volume (cm3)"="log_LV_tot_vol",
+                      "LV Lateral Index"="LV_LatIndex",
+                      "VABS ABC SS"="vinelandii_abcomp_ss",
+                      "VABS Comm SS"="vinelandii_comm_ss",
+                      "VABS DLS SS"="vinelandii_dls_ss",
+                      "VABS Motor SS"="vinelandii_motor_ss",
+                      "VABS Social SS"="vinelandii_social_ss",
+                      "DAS GCA SS"="dasii_sa_gca_stand",
+                      "DAS SNC SS"="dasii_sa_snc_stand"))
+
+cbp1 <- c("#009E73", "#E69F00", "#56B4E9",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+ggplot(data=ls_means_trans_df %>% filter(outcome=="LV Total Volume (cm3)"),
+       mapping=aes(x=SA_DX_LV_v2, y=lsmean, color=SA_DX_LV_v2))+
+  geom_point(size=8)+
+  geom_errorbar(mapping=aes(ymin=lower.CL, ymax=upper.CL),
+                size=2)+
+  facet_grid(~outcome)+
+  scale_colour_manual(values=cbp1)+
+  labs(color="24 month diagnosis", y="LS Mean", x="24 month diagnosis")+
+  theme_bw()+
+  theme(legend.position = "none",
+        text = element_text(size=25))
+ggsave(filename = "plots_tables/lv_vol_reg_lsmeans.png", 
+       limitsize = FALSE, scale=2.5)
+
+ggplot(data=ls_means_trans_df %>% filter(!outcome%in%c("LV Total Volume (cm3)",
+                                                       "LV Lateral Index")),
+       mapping=aes(x=SA_DX_LV_v2, y=lsmean, color=SA_DX_LV_v2))+
+  geom_point(size=2)+
+  geom_errorbar(mapping=aes(ymin=lower.CL, ymax=upper.CL))+
+  facet_grid(~outcome)+
+  scale_colour_manual(values=cbp1)+
+  labs(color="24 month diagnosis", y="LS Mean", x="24 month diagnosis")+
+  theme_bw()+
+  theme(legend.position = "none",
+        text = element_text(size=25))
+ggsave(filename = "plots_tables/second_outcomes_reg_lsmeans.png", 
+       limitsize = FALSE, scale=2.5)
+
+# Log LV Total Volume, outlier robustness
+# Calculate Cook's Distance for each point/model
+cooks_d <- list()
+dfbeta <- list()
+cooks_d_plot <- list()
+dfbeta_plot <- list()
+
+for(i in 1:1){
+  cooks_d[[i]] <- cooks.distance(fit[[i]])
+  
+  cooks_d_data <-
+    data.frame("obs_number"=1:dim(model.frame(fit[[i]]))[1],
+               model.frame(fit[[i]]), 
+               "cooks_d"=cooks.distance(fit[[i]]))
+  cooks_d_plot[[i]] <- 
+    ggplot(cooks_d_data, 
+           mapping=aes(x=obs_number, y=cooks_d, fill=SA_DX_LV_v2))+
+    geom_bar(stat="identity")+
+    labs(x="Observation", y="Cook's D", fill="24 month diagnosis")+
+    scale_fill_manual(values=cbp1)+
+    theme_bw()+
+    theme(text = element_text(size=25))
+  
+  print(cooks_d_plot[[i]])
+  ggsave(filename = "plots_tables/lv_vol_reg_cooksd.png", 
+       limitsize = FALSE, scale=2.5)
+  
+  dfbeta[[i]] <- 
+    data.frame("obs_number"=1:dim(model.frame(fit[[i]]))[1],
+               model.frame(fit[[i]]), 
+               "dfbeta"=dfbetas(fit[[i]]))
+  
+  names(dfbeta[[i]]) <- gsub("_SA_DX_LV_v2|centerSA_DX_LV_v2", "",
+                             gsub("\\.","",
+                                  gsub("dfbeta.", "dfbeta_", names(dfbeta[[i]])))) 
+  
+  dfbeta[[i]] <-
+    dfbeta[[i]] %>%
+    gather(beta_variable, dfbeta,
+           names(dfbeta[[i]])[grepl("dfbeta", names(dfbeta[[i]]))]) %>%
+    mutate(beta_variable=gsub("dfbeta_|dfbeta","",beta_variable))
+    
+  dfbeta_plot[[i]] <-
+    ggplot(dfbeta[[i]] %>% filter(grepl("ASD|FXS", beta_variable)),
+           mapping=aes(x=obs_number,
+                       y=dfbeta,
+                       color=SA_DX_LV_v2))+
+      geom_point()+
+      geom_hline(yintercept = 2/sqrt(dim(model.frame(fit[[i]]))[1]))+
+      geom_hline(yintercept = -2/sqrt(dim(model.frame(fit[[i]]))[1]))+
+      geom_hline(yintercept = 0)+
+      facet_grid(beta_variable~.)+
+      scale_color_manual(values=cbp1)+
+      labs(x="Observation", y="DF Beta", color="24 month diagnosis")+
+      theme_bw()
+  
+  print(dfbeta_plot[[i]])
+  ggsave(filename = "plots_tables/lv_vol_reg_dfbeta.png", 
+       limitsize = FALSE, scale=2.5)
+}
+
+kumar_data_center$predict_latindex <-
+  predict(fit[[2]], newdata=kumar_data_center)
+
+ggplot(data=kumar_data_center, 
+       mapping=aes(x=`Age_(years)`, y=predict_latindex, color=SA_DX_LV_v2))+
+  labs(x="Age (years)", y="Predicted Lateral Index", color="24 month diagnosis")+
+  geom_point()+
+  geom_smooth(method="lm", se=TRUE)+
+  theme_bw()
+ggsave(filename = "plots_tables/lat_index_reg_slopes.png", 
+       limitsize = FALSE, scale=2.5)
+```
+
+```{r outlier_analyses, results = "asis"}
+# Let's do the same for those with large DF Betas
+dfbeta_obs_to_focus_on <- dfbeta[[1]] %>%
+  filter(beta_variable=="FXS") %>%
+  mutate(LV_total_vol = exp(log_LV_tot_vol)) %>%
+  select(obs_number, SA_DX_LV_v2, LV_total_vol, beta_variable, dfbeta) %>%
+  filter(dfbeta > 2/sqrt(dim(model.frame(fit[[1]]))[1])|
+           dfbeta < -2/sqrt(dim(model.frame(fit[[1]]))[1]))
+
+ggplot(data=dfbeta_obs_to_focus_on,
+       mapping=aes(x=LV_total_vol, y=dfbeta))+
+  geom_point(size=4)+
+  facet_grid(~SA_DX_LV_v2)+
+  labs(x="Total LV Volume (cm3)", y="DF Beta")+
+  theme_bw()+
+  theme(text=element_text(size=25))
+ggsave(filename = "plots_tables/lv_tot_vol_reg_dfbeta_high_dfbeta.png", 
+       limitsize = FALSE, scale=2.5)
+
+# See these four FXS have large positive DFBeta (as do some TD).  Re-run regression analysis without these
+lv_volume_no_outliers_fxs <- dfbeta[[1]] %>%
+  filter(beta_variable=="FXS") %>%
+  filter((SA_DX_LV_v2=="FXS"&(dfbeta <= 2/sqrt(dim(model.frame(fit[[1]]))[1])))
+         |SA_DX_LV_v2!="FXS") %>%
+  select(obs_number, log_LV_tot_vol, TCV_center, Age_center, SA_DX_LV_v2) %>%
+  distinct(.)
+
+lm_fit_lv_vol_nooutliers <-
+  lm(transformed_models[[1]],
+     data=lv_volume_no_outliers_fxs)
+
+# Format results
+# Transform betas and confidence intervals
+  back_trans_results_df <- list()
+  back_trans_results_df$Outcome <- formula.tools::get.vars(transformed_models[[1]])[1]
+  back_trans_results_df$Covariate <-
+    names(summary(lm_fit_lv_vol_nooutliers)$coef[,"Estimate"])
+  
+  if(grepl("log", back_trans_results_df$Outcome)){
+    back_trans_results_df$Estimate <- 
+      100*(exp(summary(lm_fit_lv_vol_nooutliers)$coef[,"Estimate"])-1)
+  }else{
+    back_trans_results_df$Estimate <- 
+      summary(lm_fit_lv_vol_nooutliers)$coef[,"Estimate"]
+  }
+  back_trans_results_df$P_value <- 
+    ifelse(summary(lm_fit_lv_vol_nooutliers)$coef[,"Pr(>|t|)"]<0.005, "<0.005***",
+           ifelse(summary(lm_fit_lv_vol_nooutliers)$coef[,"Pr(>|t|)"]>=0.005&
+                    summary(lm_fit_lv_vol_nooutliers)$coef[,"Pr(>|t|)"]<0.01,
+                  paste0(as.character(round(
+                    summary(lm_fit_lv_vol_nooutliers)$coef[,"Pr(>|t|)"],3)),"**"),
+                  ifelse(summary(lm_fit_lv_vol_nooutliers)$coef[,"Pr(>|t|)"]>=0.01&
+                    summary(lm_fit_lv_vol_nooutliers)$coef[,"Pr(>|t|)"]<0.05,
+                    paste0(as.character(round(
+                      summary(lm_fit_lv_vol_nooutliers)$coef[,"Pr(>|t|)"],3)),"*"),
+                    as.character(round(
+                      summary(lm_fit_lv_vol_nooutliers)$coef[,"Pr(>|t|)"],3)))))
+  
+  if(grepl("log", back_trans_results_df$Outcome)){
+    back_trans_results_df$`CI` <- 
+      paste0("(", 
+             100*round(exp(confint(lm_fit_lv_vol_nooutliers)[, "2.5 %"])-1, 4), 
+             ", ", 
+             100*round(exp(confint(lm_fit_lv_vol_nooutliers)[, "97.5 %"])-1, 4), 
+             ")")
+  }else{
+    back_trans_results_df$`CI` <- 
+      paste0("(", 
+             round(confint(lm_fit_lv_vol_nooutliers)[, "2.5 %"], 4), 
+             ", ", 
+             round(confint(lm_fit_lv_vol_nooutliers)[, "97.5 %"], 4), 
+             ")")
+  }
+
+  back_trans_results_df <- data.frame(back_trans_results_df) %>%
+    filter(Covariate!="(Intercept)") %>%
+    select(Outcome, Covariate, everything())
+  
+  row.names(back_trans_results_df) <- NULL
+  back_trans_results_df$Covariate <- gsub("SA_DX_LV_v2","", 
+                                          back_trans_results_df$Covariate)
+
+  back_trans_results_full_table <-
+    back_trans_results_df %>%
+    mutate(Covariate = 
+             fct_recode(factor(Covariate),
+                        "TCV (cm3)"="TCV_center",
+                        "Age (years)"="Age_center",
+                        "TCV (cm3):FXS"="TCV_center:FXS",
+                        "TCV (cm3):ASD"="TCV_center:ASD",
+                        "Age (years):FXS"="Age_center:FXS",
+                        "Age (years):ASD"="Age_center:ASD"),
+           Outcome = 
+             fct_recode(factor(Outcome),
+                        "LV Total Volume (cm3)"="log_LV_tot_vol"))
+  
+  flextable(back_trans_results_full_table) %>%
+    width(width=1.5) %>%
+    colformat_double(digits=2) %>%
+    merge_v(j=1) %>%
+    valign(valign = "top") %>%
+    autofit() %>%
+    fix_border_issues() %>%
+    save_as_docx(path="plots_tables/back_trans_primary_results_no_outliers.docx")
+  
+# LS Means
+ls_means_trans <- 
+    data.frame(lsmeans(lm_fit_lv_vol_nooutliers, "SA_DX_LV_v2"))
+ls_means_trans$outcome <- formula.tools::get.vars(transformed_models[[1]])[1]
+
+ls_means_trans <- ls_means_trans %>%
+  mutate(lsmean=ifelse(grepl("log", outcome), exp(lsmean), lsmean),
+         lower.CL=ifelse(grepl("log", outcome), exp(lower.CL), lower.CL),
+         upper.CL=ifelse(grepl("log", outcome), exp(upper.CL), upper.CL)) %>%
+  mutate(outcome = 
+           fct_recode(factor(outcome),
+                      "LV Total Volume (cm3)"="log_LV_tot_vol"))
+
+cbp1 <- c("#009E73", "#E69F00", "#56B4E9",
+          "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+ggplot(data=ls_means_trans ,
+       mapping=aes(x=SA_DX_LV_v2, y=lsmean, color=SA_DX_LV_v2))+
+  geom_point(size=8)+
+  geom_errorbar(mapping=aes(ymin=lower.CL, ymax=upper.CL),
+                size=2)+
+  facet_grid(~outcome)+
+  scale_colour_manual(values=cbp1)+
+  labs(color="24 month diagnosis", y="LS Mean", x="24 month diagnosis")+
+  theme_bw()+
+  theme(legend.position = "none",
+        text = element_text(size=25))
+ggsave(filename = "plots_tables/lv_vol_reg_lsmeans_no_outliers.png", 
+       limitsize = FALSE, scale=2.5)
+```
+
+```{r correlation_analysis, results = "asis"}
+behavior_measures <- c("vinelandii_abcomp_ss", "vinelandii_comm_ss",
+                       "vinelandii_dls_ss", "vinelandii_motor_ss", "vinelandii_social_ss",
+                       "dasii_sa_gca_stand", "dasii_sa_snc_stand")
+behav_corr_results <- list()
+
+fxs_data <- kumar_data_center %>%
+  filter(SA_DX_LV_v2=="FXS")
+
+for(i in 1:length(behavior_measures)){
+  fxs_data_loop <- fxs_data %>%
+    select(behavior_measures[i], "LV_tot_vol_(cm3)", "Age_(years)") %>%
+    drop_na()
+  
+  behav_corr_results_corr <- 
+    tidy(cor.test(fxs_data_loop[[behavior_measures[i]]], 
+             fxs_data_loop$`LV_tot_vol_(cm3)`)) %>%
+    mutate(corr_type="Marginal",
+           corr_method="pearson",
+           behavior_measure=behavior_measures[i]) %>%
+    select(behavior_measure, corr_type, corr_method, estimate, p.value)
+  
+  behav_corr_results_partial_corr <- 
+    as.data.frame(ppcor::pcor.test(x=fxs_data_loop[[behavior_measures[i]]],
+              y=fxs_data_loop$`LV_tot_vol_(cm3)`,
+              z=fxs_data_loop$`Age_(years)`)) %>%
+    mutate(corr_type="Partial",
+           corr_method="pearson",
+           behavior_measure=behavior_measures[i]) %>%
+    select(behavior_measure, corr_type, corr_method, estimate, p.value)
+
+  behav_corr_results[[i]] <- rbind(behav_corr_results_corr, 
+                                   behav_corr_results_partial_corr)
+}
+
+behav_corr_results_df <- do.call("rbind", behav_corr_results) %>%
+  select(-corr_method) %>%
+  mutate(behavior_measure = 
+           fct_recode(factor(behavior_measure),
+                      "VABS ABC SS"="vinelandii_abcomp_ss",
+                      "VABS Comm SS"="vinelandii_comm_ss",
+                      "VABS DLS SS"="vinelandii_dls_ss",
+                      "VABS Motor SS"="vinelandii_motor_ss",
+                      "VABS Social SS"="vinelandii_social_ss",
+                      "DAS GCA SS"="dasii_sa_gca_stand",
+                      "DAS SNC SS"="dasii_sa_snc_stand"),
+         p.value_format=ifelse(p.value<0.005, "<0.005***",
+                        ifelse(p.value>=0.005&p.value<0.01, paste0(round(p.value,3), 
+                                                                   "**"),
+                               ifelse(p.value>=0.01&p.value<0.05, paste0(round(p.value,3), 
+                                                                         "*"),
+                                      round(p.value,3)))))
+
+behav_corr_results_df$p.value_adj <- 
+  p.adjust(behav_corr_results_df$p.value, method="BH")
+
+behav_corr_results_df <-
+  behav_corr_results_df %>%
+  mutate(p.value_adj_format=as.character(ifelse(p.value_adj<0.005, "<0.005***",
+                        ifelse(p.value_adj>=0.005&p.value_adj<0.01, 
+                               paste0(round(p.value_adj,3),"**"),
+                               ifelse(p.value_adj>=0.01&p.value_adj<0.05, 
+                                      paste0(round(p.value_adj,3), "*"),
+                                      round(p.value_adj,3))))))
+
+# Create flextable
+flextable(behav_corr_results_df,
+          col_keys=c("behavior_measure", "corr_type", "estimate", 
+                     "p.value_format",
+                     "p.value_adj_format")) %>%
+  colformat_double(j="estimate", digits=2) %>%
+  set_header_labels(behavior_measure = "Behavioral measure",
+                    corr_type = "Correlation type",
+                    estimate = "Estimate",
+                    p.value_format = "P-value",
+                    p.value_adj_format = "FDR-adjusted p-value") %>%
+  merge_v(j=1) %>%
+  valign(valign = "top") %>%
+  fix_border_issues() %>%
+  autofit() %>%
+  save_as_docx(path="plots_tables/behav_corr_results.docx")
+```
